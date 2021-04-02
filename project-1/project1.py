@@ -3,87 +3,32 @@ import itertools
 import numpy as np
 
 
-class Reader:
-    def __init__(self):
-        self.sources = {
-            '': self._read_empty,
-            'example': self._read_example,
-        }
-
-    def read(self, source=''):
-        return self.sources[source]()
-
-    def _read_empty(self):
-        data = np.array([])
-        labels = np.array([])
-        return data, labels
-
-    def _read_example(self):
-        data = np.array([
-            [
-                ['.', '#', '#'],
-                ['#', '.', '.'],
-                ['#', '.', '.'],
-                ['#', '.', '.'],
-                ['.', '#', '#']
-            ], [
-                ['#', '.', '#'],
-                ['#', '.', '#'],
-                ['.', '#', '.'],
-                ['#', '.', '#'],
-                ['#', '.', '#']
-            ]
-        ])
-        labels = np.array([1, -1])
-        return data, labels
-
-
-class Preprocessor:
-    def vectorize(self, matrix):
-        return matrix.ravel()
-
-    def transform(self, array, fn):
-        return np.array(list(map(fn, array)))
-
-    def preprocess(self, data, labels):
-        # Matrix vectorization
-        data = np.array([self.vectorize(d) for d in data])
-
-        # Bipolar transformation
-        data = np.array([self.transform(d, lambda x: -1 if x == '.' else 1) for d in data])
-
-        return data, labels
-
-
 class NeuralNetwork:
     def __init__(self, input_size):
-        self.W = np.zeros(input_size)
-        self.b = np.zeros(1)
+        self.W = np.zeros(input_size) # weights matrix
+        self.b = np.zeros(1) # bias
 
-    def activate_neuron(self, Y):
+    def _activate_neuron(self, Y):
+        '''Heaviside unit step function with half-maximum convention.'''
         if Y > 0:
             return 1
         elif Y == 0:
             return 0
         else:
             return -1
-        # return 1 if Y >= 0 else -1
 
     def feedforward(self, X):
+        '''Feed-forward input X through the neural network.'''
         Y = X @ self.W + self.b
-        # print('Y out:', Y)
-        return np.array(list(map(self.activate_neuron, Y)))
+        return np.array(list(map(self._activate_neuron, Y)))
 
     def train(self, X, T):
+        '''Trains neural network with input data X and labels T using
+        Hebb's rule.'''
         Y = self.feedforward(X)
 
+        # Train until fitting perfectly the training data
         while not np.array_equal(Y, T):
-            # print('X:', X)
-            # print('T:', T)
-            # print('W:', self.W)
-            # print('b:', self.b)
-            # print('Y:', Y)
-
             for x, t in zip(X, T):
                 self.W = self.W + x*t
                 self.b = self.b + t
@@ -91,73 +36,116 @@ class NeuralNetwork:
             Y = self.feedforward(X)
 
 
+def generate_modified_data(data, mistake_type=None, num_modified_pixels=0):
+    '''Generates modifications of `data` by introducing mistakes.
+
+    Generate one modified data at a time by introducing a
+    `mistake_type` such as "corrupted", to flip pixels, or "missing",
+    to replace pixels by 0. This function will return data with all
+    possible mistakes by combining values [0, 1, ..., 14] in groups of
+    size `num_modified_pixels`.
+    '''
+    # Generate all possible combinations of pixels in the set
+    # [0, 1, ..., 14] in groups of size num_modified_pixels
+    modified_pixels_combinations = itertools.combinations(
+        range(15),
+        num_modified_pixels
+    )
+
+    for pixels in modified_pixels_combinations:
+        # Avoid corrupting original data
+        corrupted_data = np.copy(data)
+        for pixel in pixels:
+            if mistake_type == 'corrupted':
+                # Flip pixel value
+                corrupted_data[pixel] *= -1
+            elif mistake_type == 'missing':
+                # Replace pixel by 0
+                corrupted_data[pixel] = 0
+            else:
+                raise ValueError(
+                    'mistake_type must be "corrupted" or "missing"'
+                )
+
+        # Generate one corrupted data after modifying pixels
+        yield corrupted_data
+
+
 def main():
-    data, labels = Reader().read('example')
-    data, labels = Preprocessor().preprocess(data, labels)
+    # Training data
+    data = np.array([
+        [
+            ['.', '#', '#'],
+            ['#', '.', '.'],
+            ['#', '.', '.'],
+            ['#', '.', '.'],
+            ['.', '#', '#']
+        ], [
+            ['#', '.', '#'],
+            ['#', '.', '#'],
+            ['.', '#', '.'],
+            ['#', '.', '#'],
+            ['#', '.', '#']
+        ]
+    ])
+    labels = np.array([1, -1])
+
+    # Preprocessing data
+    ## Concatenate column-wise
+    data = np.array([d.ravel(order='F') for d in data])
+    ## Bipolar transformation
+    data = np.array(
+        [list(map(lambda x: -1 if x == '.' else 1, d)) for d in data]
+    )
+
+    # Defining neural network with 15 input neurons
     nn = NeuralNetwork(input_size=15)
+
+    # Train neural network using training data
     nn.train(data, labels)
 
-    # Flipped pixels
-    errors = []
-    for i in range(16):
-        corrupted_pixels = itertools.combinations(range(15), i)
+    # Test with corrupted pixels
+    errors_with_corrupted_pixels = []
+    for num_modified_pixels in range(16):
         num_errors = 0
-        for pixels in corrupted_pixels:
-            # print('Pixels:', pixels)
-            corrupted_data = np.copy(data)
-            for pixel in pixels:
-                corrupted_data[0][pixel] *= -1
-            output = nn.feedforward(corrupted_data[0])
+        for modified_data in generate_modified_data(
+                data[0],
+                mistake_type='corrupted',
+                num_modified_pixels=num_modified_pixels
+            ):
+            output = nn.feedforward(modified_data)
+
+            if not np.array_equal(output, [1]):
+                num_errors += 1
+        errors_with_corrupted_pixels.append(num_errors)
+
+    # Test with missing pixels
+    errors_with_missing_pixels = []
+    input_data_for_first_error = None
+    for num_modified_pixels in range(16):
+        num_errors = 0
+        for modified_data in generate_modified_data(
+                data[0],
+                mistake_type='missing',
+                num_modified_pixels=num_modified_pixels
+            ):
+            output = nn.feedforward(modified_data)
 
             if not np.array_equal(output, [1]):
                 num_errors += 1
 
-            # print('X:', data[0])
-            # print('Corrupted X:', corrupted_data[0])
-            # print('T:', labels[0])
-            # # print('W:', nn.W)
-            # # print('b:', nn.b)
-            # print('Y:', output)
-            # print()
-        errors.append(num_errors)
-    print('Errors:', errors)
+                if input_data_for_first_error is None:
+                    input_data_for_first_error = modified_data
 
-    # Undetermined pixels
-    errors = []
-    first_error = None
-    for i in range(16):
-        corrupted_pixels = itertools.combinations(range(15), i)
-        num_errors = 0
-        for pixels in corrupted_pixels:
-            # print('Pixels:', pixels)
-            corrupted_data = np.copy(data)
-            for pixel in pixels:
-                corrupted_data[0][pixel] = 0
-            output = nn.feedforward(corrupted_data[0])
+        errors_with_missing_pixels.append(num_errors)
 
-            if not np.array_equal(output, [1]):
-                num_errors += 1
-
-                if first_error is None:
-                    first_error = corrupted_data[0]
-
-            # print('X:', data[0])
-            # print('Corrupted X:', corrupted_data[0])
-            # print('W:', nn.W)
-            # print('T:', labels[0])
-            # print('W:', nn.W)
-            # print('b:', nn.b)
-            # print('Y:', output)
-            # print()
-        errors.append(num_errors)
-    print('Errors:', errors)
-    print('First error:', first_error)
-
-    # _ _ #
-    # # . _
-    # _ _ .
-    # # . _
-    # _ _ #
+    # Print results
+    print('Errors with corrupted pixels:')
+    print(errors_with_corrupted_pixels)
+    print('Errors with missing pixels:')
+    print(errors_with_missing_pixels)
+    print('Input on first error with missing pixels:')
+    print(input_data_for_first_error)
 
 if __name__ == '__main__':
     main()
